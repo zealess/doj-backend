@@ -4,12 +4,39 @@ const User = require("../models/User");
 
 const router = express.Router();
 
-/**
- * Construit l’objet utilisateur renvoyé au frontend
- */
-function buildUserPayload(user) {
+// ──────────────────────────────────────────
+// Middleware auth (JWT)
+// ──────────────────────────────────────────
+const authMiddleware = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.split(" ")[1]
+      : null;
+
+    if (!token) {
+      return res.status(401).json({ message: "Token manquant." });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({ message: "Utilisateur introuvable." });
+    }
+
+    req.user = user;
+    next();
+  } catch (err) {
+    console.error("Erreur middleware auth:", err);
+    return res.status(401).json({ message: "Token invalide ou expiré." });
+  }
+};
+
+// Helper pour normaliser l’objet utilisateur envoyé au front
+function mapUser(user) {
   return {
-    id: user._id,
+    id: user._id.toString(),
     username: user.username,
     email: user.email,
     role: user.role,
@@ -20,8 +47,7 @@ function buildUserPayload(user) {
     discordUsername: user.discordUsername || null,
     discordNickname: user.discordNickname || null,
     discordAvatar: user.discordAvatar || null,
-    discordHighestRole: user.discordHighestRoleName || null,
-    judgeGrade: user.judgeGrade || "Non défini",
+    discordHighestRole: user.discordHighestRole || "Non défini",
 
     // Structure interne
     sector: user.sector || null,
@@ -33,9 +59,8 @@ function buildUserPayload(user) {
 }
 
 // ──────────────────────────────────────────
-// REGISTER
+// POST /api/auth/register
 // ──────────────────────────────────────────
-
 router.post("/register", async (req, res) => {
   try {
     const { username, email, password, confirmPassword } = req.body;
@@ -65,9 +90,7 @@ router.post("/register", async (req, res) => {
     const user = new User({ username, email, password });
     await user.save();
 
-    return res
-      .status(201)
-      .json({ message: "Compte créé avec succès." });
+    return res.status(201).json({ message: "Compte créé avec succès." });
   } catch (error) {
     console.error("Erreur register:", error);
     return res.status(500).json({ message: "Erreur serveur." });
@@ -75,9 +98,8 @@ router.post("/register", async (req, res) => {
 });
 
 // ──────────────────────────────────────────
-// LOGIN
+// POST /api/auth/login
 // ──────────────────────────────────────────
-
 router.post("/login", async (req, res) => {
   try {
     const { identifier, password } = req.body;
@@ -108,7 +130,7 @@ router.post("/login", async (req, res) => {
     return res.json({
       message: "Connexion réussie.",
       token,
-      user: buildUserPayload(user),
+      user: mapUser(user),
     });
   } catch (error) {
     console.error("Erreur login:", error);
@@ -117,108 +139,66 @@ router.post("/login", async (req, res) => {
 });
 
 // ──────────────────────────────────────────
-// MIDDLEWARE D’AUTH
-// ──────────────────────────────────────────
-
-function authMiddleware(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ")
-    ? header.slice(7)
-    : null;
-
-  if (!token) {
-    return res.status(401).json({ message: "Token manquant." });
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.userId = decoded.id;
-    req.userRole = decoded.role;
-    next();
-  } catch (err) {
-    console.error("Erreur token:", err);
-    return res.status(401).json({ message: "Token invalide ou expiré." });
-  }
-}
-
-// ──────────────────────────────────────────
 // GET /api/auth/me
 // ──────────────────────────────────────────
-
 router.get("/me", authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.userId);
-    if (!user) {
-      return res
-        .status(404)
-        .json({ message: "Utilisateur introuvable." });
-    }
-
-    return res.json({
-      user: buildUserPayload(user),
-    });
-  } catch (err) {
-    console.error("Erreur /me:", err);
+    const user = req.user;
+    return res.json({ user: mapUser(user) });
+  } catch (error) {
+    console.error("Erreur /me:", error);
     return res.status(500).json({ message: "Erreur serveur." });
   }
 });
 
 // ──────────────────────────────────────────
-// PUT /api/auth/profile  (structure & habilitations)
+// PUT /api/auth/profile
+// (modification secteur / pôles / habilitations / FJF)
 // ──────────────────────────────────────────
-
 router.put("/profile", authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.userId);
-    if (!user) {
-      return res
-        .status(404)
-        .json({ message: "Utilisateur introuvable." });
-    }
+    const user = req.user;
 
-    // Seuls certains grades peuvent modifier
     const allowedGrades = [
       "Juge Fédéral",
       "Juge Fédéral Adjoint",
       "Juge Assesseur",
     ];
 
-    if (!allowedGrades.includes(user.discordHighestRoleName || "")) {
+    const currentGrade = user.discordHighestRole || "";
+
+    if (!allowedGrades.includes(currentGrade)) {
       return res.status(403).json({
         message:
-          "Vous n'avez pas les droits pour modifier la structure / habilitations.",
+          "Vous n'êtes pas autorisé à modifier la structure de ce profil.",
       });
     }
 
-    const {
-      sector,
-      service,
-      poles,
-      habilitations,
-      fjf,
-    } = req.body;
+    const { sector, service, poles, habilitations, fjf } = req.body;
 
-    user.sector = sector || null;
-    user.service = service || null;
+    if (typeof sector !== "undefined") user.sector = sector || null;
+    if (typeof service !== "undefined") user.service = service || null;
 
-    user.poles =
-      Array.isArray(poles) && poles.length > 0
-        ? poles
-        : [];
-    user.habilitations =
-      Array.isArray(habilitations) && habilitations.length > 0
-        ? habilitations
-        : [];
-    user.fjf = !!fjf;
+    if (Array.isArray(poles)) {
+      user.poles = poles;
+    }
+
+    if (Array.isArray(habilitations)) {
+      user.habilitations = habilitations;
+    }
+
+    if (typeof fjf !== "undefined") {
+      user.fjf = !!fjf;
+    }
 
     await user.save();
 
     return res.json({
       message: "Profil mis à jour.",
-      user: buildUserPayload(user),
+      user: mapUser(user),
     });
-  } catch (err) {
-    console.error("Erreur PUT /profile:", err);
+  } catch (error) {
+    console.error("Erreur update profil:", error);
     return res.status(500).json({ message: "Erreur serveur." });
   }
 });

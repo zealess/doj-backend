@@ -1,5 +1,5 @@
-// routes/discord.js
 const express = require("express");
+const axios = require("axios");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
@@ -11,149 +11,181 @@ const {
   DISCORD_REDIRECT_URI,
   DISCORD_BOT_TOKEN,
   DISCORD_GUILD_ID,
-  DISCORD_ROLE_JF_ID,
-  DISCORD_ROLE_JFA_ID,
-  DISCORD_ROLE_JA_ID,
   JWT_SECRET,
 } = process.env;
 
-// GET /api/discord/login?token=JWT
-router.get("/login", (req, res) => {
-  const { token } = req.query;
-  if (!token) {
-    return res.status(400).send("Missing token");
-  }
-
-  // On met le JWT dans "state" pour le récupérer à la callback
+// Petits helpers pour les URL OAuth
+function getDiscordAuthorizeUrl(token) {
   const params = new URLSearchParams({
     client_id: DISCORD_CLIENT_ID,
     response_type: "code",
-    scope: "identify",
     redirect_uri: DISCORD_REDIRECT_URI,
+    scope: "identify guilds guilds.members.read",
     state: token,
-    prompt: "consent",
   });
 
-  const url = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
-  return res.redirect(url);
-});
-
-// helper pour mapper les rôles -> grade
-function computeJudgeGrade(roles = []) {
-  if (!Array.isArray(roles)) return "Non défini";
-
-  if (DISCORD_ROLE_JF_ID && roles.includes(DISCORD_ROLE_JF_ID)) {
-    return "Juge Fédéral";
-  }
-  if (DISCORD_ROLE_JFA_ID && roles.includes(DISCORD_ROLE_JFA_ID)) {
-    return "Juge Fédéral Adjoint";
-  }
-  if (DISCORD_ROLE_JA_ID && roles.includes(DISCORD_ROLE_JA_ID)) {
-    return "Juge Assesseur";
-  }
-  return "Non défini";
+  return `https://discord.com/api/oauth2/authorize?${params.toString()}`;
 }
 
-// GET /api/discord/callback?code=...&state=JWT
+// ──────────────────────────────────────────
+// GET /api/discord/login
+// Lance l'OAuth Discord à partir du token JWT du portail
+// ──────────────────────────────────────────
+router.get("/login", async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) {
+      return res.status(400).send("Token manquant.");
+    }
+
+    // Vérifier que le token JWT est valide
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      console.error("JWT invalide dans /discord/login:", err);
+      return res.status(401).send("Token invalide.");
+    }
+
+    // On ne fait rien de plus ici, on redirige juste sur Discord
+    const url = getDiscordAuthorizeUrl(token);
+    return res.redirect(url);
+  } catch (err) {
+    console.error("Erreur /discord/login:", err);
+    return res.status(500).send("Erreur serveur Discord login");
+  }
+});
+
+// ──────────────────────────────────────────
+// GET /api/discord/callback
+// Callback OAuth Discord → on link le compte à l'utilisateur
+// ──────────────────────────────────────────
 router.get("/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
+
     if (!code || !state) {
-      return res.status(400).send("Missing code or state");
+      return res.status(400).send("Code ou state manquant.");
     }
 
-    // Vérifier le JWT (state) et récupérer l'id du user DOJ
-    let payload;
+    // `state` contient le JWT du portail
+    let decoded;
     try {
-      payload = jwt.verify(state, JWT_SECRET);
+      decoded = jwt.verify(state, JWT_SECRET);
     } catch (err) {
-      console.error("JWT state invalide:", err);
-      return res.status(400).send("Invalid state");
+      console.error("JWT invalide dans /discord/callback:", err);
+      return res.status(401).send("Token invalide.");
     }
 
-    const dojUserId = payload.id;
+    const userId = decoded.id;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).send("Utilisateur introuvable.");
+    }
 
-    // 1) Échanger le code OAuth Discord -> access_token
-    const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
+    // 1) Échanger le code contre un access_token Discord
+    const tokenResponse = await axios.post(
+      "https://discord.com/api/oauth2/token",
+      new URLSearchParams({
         client_id: DISCORD_CLIENT_ID,
         client_secret: DISCORD_CLIENT_SECRET,
         grant_type: "authorization_code",
         code,
         redirect_uri: DISCORD_REDIRECT_URI,
-      }),
+      }).toString(),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    const { access_token, token_type } = tokenResponse.data;
+    const authHeader = `${token_type} ${access_token}`;
+
+    // 2) Récupérer l'identité Discord de l'utilisateur
+    const meResp = await axios.get("https://discord.com/api/users/@me", {
+      headers: { Authorization: authHeader },
     });
 
-    if (!tokenRes.ok) {
-      console.error("Échec échange token Discord:", await tokenRes.text());
-      return res.status(500).send("Discord token error");
-    }
+    const discordUser = meResp.data;
+    const discordUserId = discordUser.id;
+    const discordUsername =
+      discordUser.global_name || discordUser.username || "Inconnu";
 
-    const tokenData = await tokenRes.json();
-    const accessToken = tokenData.access_token;
+    // 3) Si on a un BOT_TOKEN + GUILD_ID, on va chercher les infos de grade/nickname
+    let nickname = null;
+    let highestRole = null;
 
-    // 2) Infos de base utilisateur Discord
-    const userRes = await fetch("https://discord.com/api/users/@me", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    if (DISCORD_BOT_TOKEN && DISCORD_GUILD_ID) {
+      try {
+        // Récupérer les infos du membre dans le serveur
+        const memberResp = await axios.get(
+          `https://discord.com/api/guilds/${DISCORD_GUILD_ID}/members/${discordUserId}`,
+          {
+            headers: {
+              Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+            },
+          }
+        );
 
-    if (!userRes.ok) {
-      console.error("Erreur /users/@me:", await userRes.text());
-      return res.status(500).send("Discord user error");
-    }
+        const guildMember = memberResp.data;
 
-    const discordUser = await userRes.json();
+        nickname = guildMember.nick || null;
 
-    // 3) Récup roles sur TON serveur via le bot
-    let memberRoles = [];
-    try {
-      const memberRes = await fetch(
-        `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/members/${discordUser.id}`,
-        {
-          headers: {
-            Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
-          },
+        // Récupérer les rôles du serveur
+        const rolesResp = await axios.get(
+          `https://discord.com/api/guilds/${DISCORD_GUILD_ID}/roles`,
+          {
+            headers: {
+              Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+            },
+          }
+        );
+
+        const guildRoles = rolesResp.data; // tableau de { id, name, ... }
+
+        const matchingRoles = guildMember.roles
+          .map((roleId) => guildRoles.find((r) => r.id === roleId))
+          .filter(Boolean);
+
+        const gradeOrder = [
+          "Juge Fédéral",
+          "Juge Fédéral Adjoint",
+          "Juge Assesseur",
+          "Juge",
+          "Magistrat",
+        ];
+
+        for (const label of gradeOrder) {
+          const found = matchingRoles.find((r) => r && r.name === label);
+          if (found) {
+            highestRole = label;
+            break;
+          }
         }
-      );
-
-      if (memberRes.ok) {
-        const memberData = await memberRes.json();
-        memberRoles = memberData.roles || [];
-      } else {
-        console.warn(
+      } catch (err) {
+        // 400 si l'utilisateur n'est pas dans le serveur ou autre souci
+        console.error(
           "Impossible de récupérer le membre Discord (peut-être pas sur le serveur ?) :",
-          memberRes.status
+          err.response?.status || err.message
         );
       }
-    } catch (err) {
-      console.error("Erreur fetch membre Discord:", err);
     }
 
-    const judgeGrade = computeJudgeGrade(memberRoles);
-
-    // 4) Mise à jour du User dans Mongo
-    const user = await User.findById(dojUserId);
-    if (!user) {
-      return res.status(404).send("User DOJ not found");
-    }
-
-    user.discordId = discordUser.id;
-    user.discordUsername =
-      discordUser.global_name || discordUser.username || null;
+    // 4) Sauvegarder sur l'utilisateur
+    user.discordId = discordUserId;
+    user.discordUsername = discordUsername;
+    user.discordNickname = nickname || discordUsername;
     user.discordAvatar = discordUser.avatar
-      ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=256`
+      ? `https://cdn.discordapp.com/avatars/${discordUserId}/${discordUser.avatar}.png?size=256`
       : null;
+    user.discordHighestRole = highestRole; // ⬅️ CHAMP ALIGNÉ AVEC LE FRONT
     user.discordLinkedAt = new Date();
-    user.judgeGrade = judgeGrade;
-    user.judgeGrade = judgeGrade;
-    user.discordHighestRoleName = judgeGrade;
-    
+
     await user.save();
 
-    // 5) Redirection vers le dashboard
-    // (le front lit ?discord=linked et recharge /api/auth/me)
+    // 5) Redirection vers le dashboard avec un flag pour refresh
     const redirectUrl = `https://doj-frontend-rho.vercel.app/dashboard?discord=linked`;
     return res.redirect(redirectUrl);
   } catch (err) {

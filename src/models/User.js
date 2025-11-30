@@ -28,64 +28,39 @@ const userSchema = new mongoose.Schema(
       default: "user",
     },
 
-    // -------- LIAISON DISCORD --------
+    // ───────── Discord ─────────
     discordId: { type: String },
     discordUsername: { type: String },
     discordNickname: { type: String },
-    discordHighestRoleId: { type: String },
-    discordHighestRoleName: { type: String },
     discordAvatar: { type: String },
+    discordHighestRole: { type: String }, // C’est ça qu’on lit dans le front
     discordLinkedAt: { type: Date },
 
-    // --- Infos récupérées depuis Discord / serveur ---
-    judgeGrade: {
-      type: String,
-      default: "Non défini", // Juge Fédéral, Juge Fédéral Adjoint, Juge Assesseur…
-    },
-
-    // -------- CHAMPS MANUELS POUR LE PROFIL --------
-    sector: { type: String, default: "Non défini" },
-    service: { type: String, default: "Non défini" },
-
-    // on passe en véritables tableaux de string
+    // ───────── Structure interne DOJ ─────────
+    sector: { type: String, default: null },
+    service: { type: String, default: null },
     poles: { type: [String], default: [] },
     habilitations: { type: [String], default: [] },
-
-    fjf: { type: Boolean, default: false }, // false = non habilité FJF
+    fjf: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 // Hash du mot de passe
-userSchema.pre("save", async function () {
-  if (!this.isModified("password")) return;
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
+// Comparaison de mot de passe
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
-};
-
-// ➜ objet "safe" renvoyé au front
-userSchema.methods.toSafeObject = function () {
-  return {
-    id: this._id,
-    username: this.username,
-    email: this.email,
-    role: this.role,
-
-    discordLinked: !!this.discordId,
-    discordUsername: this.discordUsername || null,
-    discordAvatar: this.discordAvatar || null,
-    judgeGrade: this.judgeGrade || "Non défini",
-
-    sector: this.sector,
-    service: this.service,
-    poles: this.poles || [],
-    habilitations: this.habilitations || [],
-    fjf: this.fjf,
-  };
 };
 
 module.exports = mongoose.model("User", userSchema);
