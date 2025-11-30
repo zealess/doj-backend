@@ -109,31 +109,36 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// GET /api/auth/me (user courant via JWT)
-router.get("/me", async (req, res) => {
+// GET /api/auth/me
+router.get("/me", authMiddleware, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7)
-      : null;
+    const user = await User.findById(req.userId);
 
-    if (!token) {
-      return res.status(401).json({ message: "Token manquant." });
-    }
-
-    let payload;
-    try {
-      payload = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (e) {
-      return res.status(401).json({ message: "Token invalide." });
-    }
-
-    const user = await User.findById(payload.id);
     if (!user) {
       return res.status(404).json({ message: "Utilisateur introuvable." });
     }
 
-    return res.json({ user: buildSafeUser(user) });
+    const safeUser = {
+      id: user._id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      // Discord
+      discordLinked: !!user.discordId,
+      discordId: user.discordId || null,
+      discordUsername: user.discordUsername || null,
+      discordNickname: user.discordNickname || null,
+      discordAvatar: user.discordAvatar || null,
+      judgeGrade: user.judgeGrade || null,
+      // Structure
+      poles: user.poles || [],
+      habilitations: user.habilitations || [],
+      fjf: !!user.fjf,
+      sector: user.sector || null,
+      service: user.service || null,
+    };
+
+    return res.json({ user: safeUser });
   } catch (error) {
     console.error("Erreur /me:", error);
     return res.status(500).json({ message: "Erreur serveur." });
