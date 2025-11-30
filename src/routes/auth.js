@@ -1,42 +1,14 @@
+// backend/src/routes/auth.js
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 const router = express.Router();
 
-// ──────────────────────────────────────────
-// Middleware auth (JWT)
-// ──────────────────────────────────────────
-const authMiddleware = async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.split(" ")[1]
-      : null;
-
-    if (!token) {
-      return res.status(401).json({ message: "Token manquant." });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id);
-
-    if (!user) {
-      return res.status(401).json({ message: "Utilisateur introuvable." });
-    }
-
-    req.user = user;
-    next();
-  } catch (err) {
-    console.error("Erreur middleware auth:", err);
-    return res.status(401).json({ message: "Token invalide ou expiré." });
-  }
-};
-
-// Helper pour normaliser l’objet utilisateur envoyé au front
-function mapUser(user) {
+// Petite fonction utilitaire pour renvoyer un user "safe" au front
+function buildSafeUser(user) {
   return {
-    id: user._id.toString(),
+    id: user._id,
     username: user.username,
     email: user.email,
     role: user.role,
@@ -47,20 +19,20 @@ function mapUser(user) {
     discordUsername: user.discordUsername || null,
     discordNickname: user.discordNickname || null,
     discordAvatar: user.discordAvatar || null,
-    discordHighestRole: user.discordHighestRole || "Non défini",
+    discordHighestRole: user.judgeGrade || null,
 
     // Structure interne
     sector: user.sector || null,
     service: user.service || null,
     poles: Array.isArray(user.poles) ? user.poles : [],
-    habilitations: Array.isArray(user.habilitations) ? user.habilitations : [],
+    habilitations: Array.isArray(user.habilitations)
+      ? user.habilitations
+      : [],
     fjf: !!user.fjf,
   };
 }
 
-// ──────────────────────────────────────────
 // POST /api/auth/register
-// ──────────────────────────────────────────
 router.post("/register", async (req, res) => {
   try {
     const { username, email, password, confirmPassword } = req.body;
@@ -80,7 +52,6 @@ router.post("/register", async (req, res) => {
     const existingUser = await User.findOne({
       $or: [{ email }, { username }],
     });
-
     if (existingUser) {
       return res.status(400).json({
         message: "Un compte avec ce pseudo ou cet email existe déjà.",
@@ -93,13 +64,13 @@ router.post("/register", async (req, res) => {
     return res.status(201).json({ message: "Compte créé avec succès." });
   } catch (error) {
     console.error("Erreur register:", error);
-    return res.status(500).json({ message: "Erreur serveur." });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur lors de la création du compte." });
   }
 });
 
-// ──────────────────────────────────────────
 // POST /api/auth/login
-// ──────────────────────────────────────────
 router.post("/login", async (req, res) => {
   try {
     const { identifier, password } = req.body;
@@ -130,7 +101,7 @@ router.post("/login", async (req, res) => {
     return res.json({
       message: "Connexion réussie.",
       token,
-      user: mapUser(user),
+      user: buildSafeUser(user),
     });
   } catch (error) {
     console.error("Erreur login:", error);
@@ -138,64 +109,76 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ──────────────────────────────────────────
-// GET /api/auth/me
-// ──────────────────────────────────────────
-router.get("/me", authMiddleware, async (req, res) => {
+// GET /api/auth/me (user courant via JWT)
+router.get("/me", async (req, res) => {
   try {
-    const user = req.user;
-    return res.json({ user: mapUser(user) });
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null;
+
+    if (!token) {
+      return res.status(401).json({ message: "Token manquant." });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ message: "Token invalide." });
+    }
+
+    const user = await User.findById(payload.id);
+    if (!user) {
+      return res.status(404).json({ message: "Utilisateur introuvable." });
+    }
+
+    return res.json({ user: buildSafeUser(user) });
   } catch (error) {
     console.error("Erreur /me:", error);
     return res.status(500).json({ message: "Erreur serveur." });
   }
 });
 
-// ──────────────────────────────────────────
 // PUT /api/auth/profile
-// (modification secteur / pôles / habilitations / FJF)
-// ──────────────────────────────────────────
-router.put("/profile", authMiddleware, async (req, res) => {
+// Mise à jour de la structure (secteur, service, pôles, habilitations, fjf)
+// ⚠ côté front tu vérifies déjà que seuls certains grades peuvent modifier
+router.put("/profile", async (req, res) => {
   try {
-    const user = req.user;
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null;
 
-    const allowedGrades = [
-      "Juge Fédéral",
-      "Juge Fédéral Adjoint",
-      "Juge Assesseur",
-    ];
+    if (!token) {
+      return res.status(401).json({ message: "Token manquant." });
+    }
 
-    const currentGrade = user.discordHighestRole || "";
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ message: "Token invalide." });
+    }
 
-    if (!allowedGrades.includes(currentGrade)) {
-      return res.status(403).json({
-        message:
-          "Vous n'êtes pas autorisé à modifier la structure de ce profil.",
-      });
+    const user = await User.findById(payload.id);
+    if (!user) {
+      return res.status(404).json({ message: "Utilisateur introuvable." });
     }
 
     const { sector, service, poles, habilitations, fjf } = req.body;
 
-    if (typeof sector !== "undefined") user.sector = sector || null;
-    if (typeof service !== "undefined") user.service = service || null;
-
-    if (Array.isArray(poles)) {
-      user.poles = poles;
-    }
-
-    if (Array.isArray(habilitations)) {
-      user.habilitations = habilitations;
-    }
-
-    if (typeof fjf !== "undefined") {
-      user.fjf = !!fjf;
-    }
+    if (typeof sector !== "undefined") user.sector = sector;
+    if (typeof service !== "undefined") user.service = service;
+    if (Array.isArray(poles)) user.poles = poles;
+    if (Array.isArray(habilitations)) user.habilitations = habilitations;
+    if (typeof fjf !== "undefined") user.fjf = !!fjf;
 
     await user.save();
 
     return res.json({
       message: "Profil mis à jour.",
-      user: mapUser(user),
+      user: buildSafeUser(user),
     });
   } catch (error) {
     console.error("Erreur update profil:", error);
