@@ -28,37 +28,45 @@ const userSchema = new mongoose.Schema(
       default: "user",
     },
 
-    // ───────── Discord ─────────
+    // --- LIAISON DISCORD ---
     discordId: { type: String },
     discordUsername: { type: String },
     discordNickname: { type: String },
     discordAvatar: { type: String },
-    discordHighestRole: { type: String }, // C’est ça qu’on lit dans le front
     discordLinkedAt: { type: Date },
 
-    // ───────── Structure interne DOJ ─────────
-    sector: { type: String, default: null },
-    service: { type: String, default: null },
-    poles: { type: [String], default: [] },
-    habilitations: { type: [String], default: [] },
-    fjf: { type: Boolean, default: false },
+    // Grade le plus haut remonté par le bot / ton backend
+    judgeGrade: { type: String },
+
+    // --- STRUCTURE DOJ ---
+    sector: { type: String },
+    service: { type: String },
+    poles: {
+      type: [String],
+      default: [],
+    },
+    habilitations: {
+      type: [String],
+      default: [],
+    },
+    fjf: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
 
-// Hash du mot de passe
-userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (err) {
-    next(err);
-  }
+// Hook de hash du mot de passe
+// ⚠️ Avec une fonction async, on NE met PAS "next" en paramètre
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
+
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Comparaison de mot de passe
+// Méthode de comparaison de mot de passe
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
