@@ -59,11 +59,16 @@ const userSchema = new mongoose.Schema(
 
 // Hook de hash du mot de passe
 // ⚠️ Avec une fonction async, on NE met PAS "next" en paramètre
-userSchema.pre("save", async function () {
-  if (!this.isModified("password")) return;
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
 
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Méthode de comparaison de mot de passe
