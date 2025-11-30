@@ -31,26 +31,26 @@ const userSchema = new mongoose.Schema(
     // -------- LIAISON DISCORD --------
     discordId: { type: String },
     discordUsername: { type: String },
-    discordNickname:   { type: String },
+    discordNickname: { type: String },
     discordHighestRoleId: { type: String },
     discordHighestRoleName: { type: String },
     discordAvatar: { type: String },
     discordLinkedAt: { type: Date },
 
-     // --- Infos récupérées depuis Discord / serveur ---
+    // --- Infos récupérées depuis Discord / serveur ---
     judgeGrade: {
       type: String,
       default: "Non défini", // Juge Fédéral, Juge Fédéral Adjoint, Juge Assesseur…
     },
 
-    // grade récupéré via Discord (rôle le plus haut)
-    
-
     // -------- CHAMPS MANUELS POUR LE PROFIL --------
     sector: { type: String, default: "Non défini" },
     service: { type: String, default: "Non défini" },
-    poles: { type: String, default: "Aucun pôle renseigné" },
-    habilitations: { type: String, default: "Aucune habilitation renseignée" },
+
+    // on passe en véritables tableaux de string
+    poles: { type: [String], default: [] },
+    habilitations: { type: [String], default: [] },
+
     fjf: { type: Boolean, default: false }, // false = non habilité FJF
   },
   { timestamps: true }
@@ -65,6 +65,27 @@ userSchema.pre("save", async function () {
 
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
+};
+
+// ➜ objet "safe" renvoyé au front
+userSchema.methods.toSafeObject = function () {
+  return {
+    id: this._id,
+    username: this.username,
+    email: this.email,
+    role: this.role,
+
+    discordLinked: !!this.discordId,
+    discordUsername: this.discordUsername || null,
+    discordAvatar: this.discordAvatar || null,
+    judgeGrade: this.judgeGrade || "Non défini",
+
+    sector: this.sector,
+    service: this.service,
+    poles: this.poles || [],
+    habilitations: this.habilitations || [],
+    fjf: this.fjf,
+  };
 };
 
 module.exports = mongoose.model("User", userSchema);

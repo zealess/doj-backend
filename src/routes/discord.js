@@ -147,7 +147,9 @@ router.get("/callback", async (req, res) => {
       : null;
     user.discordLinkedAt = new Date();
     user.judgeGrade = judgeGrade;
-
+    user.judgeGrade = judgeGrade;
+    user.discordHighestRoleName = judgeGrade;
+    
     await user.save();
 
     // 5) Redirection vers le dashboard
