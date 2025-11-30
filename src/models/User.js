@@ -31,6 +31,9 @@ const userSchema = new mongoose.Schema(
     // -------- LIAISON DISCORD --------
     discordId: { type: String },
     discordUsername: { type: String },
+    discordNickname:   { type: String },
+    discordHighestRoleId: { type: String },
+    discordHighestRoleName: { type: String },
     discordAvatar: { type: String },
     discordLinkedAt: { type: Date },
 
@@ -39,10 +42,9 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "Non défini", // Juge Fédéral, Juge Fédéral Adjoint, Juge Assesseur…
     },
-    
+
     // grade récupéré via Discord (rôle le plus haut)
-    discordHighestRoleId: { type: String },
-    discordHighestRoleName: { type: String },
+    
 
     // -------- CHAMPS MANUELS POUR LE PROFIL --------
     sector: { type: String, default: "Non défini" },
