@@ -75,9 +75,17 @@ router.post("/login", async (req, res) => {
         username: user.username,
         email: user.email,
         role: user.role,
+
         discordLinked: !!user.discordId,
         discordUsername: user.discordUsername || null,
         discordAvatar: user.discordAvatar || null,
+        discordHighestRoleName: user.discordHighestRoleName || null,
+
+        sector: user.sector,
+        service: user.service,
+        poles: user.poles,
+        habilitations: user.habilitations,
+        fjf: user.fjf,
       },
     });
   } catch (error) {
@@ -88,26 +96,9 @@ router.post("/login", async (req, res) => {
 
 // GET /api/auth/me
 // Retourne l'utilisateur connecté à partir du token JWT
-router.get("/me", async (req, res) => {
+router.get("/me", authMiddleware, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7)
-      : null;
-
-    if (!token) {
-      return res.status(401).json({ message: "Token manquant." });
-    }
-
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (e) {
-      console.error("JWT invalide dans /api/auth/me:", e);
-      return res.status(401).json({ message: "Token invalide." });
-    }
-
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(req.user.id).select("-password");
     if (!user) {
       return res.status(404).json({ message: "Utilisateur introuvable." });
     }
@@ -118,13 +109,20 @@ router.get("/me", async (req, res) => {
         username: user.username,
         email: user.email,
         role: user.role,
+
         discordLinked: !!user.discordId,
         discordUsername: user.discordUsername || null,
         discordAvatar: user.discordAvatar || null,
+        judgeGrade: user.judgeGrade || "Non défini",
+        sector: user.sector,
+        poles: user.poles,
+        habilitations: user.habilitations,
+        fjf: user.fjf,
+        service: user.service,
       },
     });
-  } catch (error) {
-    console.error("Erreur /api/auth/me:", error);
+  } catch (err) {
+    console.error("Erreur /me:", err);
     return res.status(500).json({ message: "Erreur serveur." });
   }
 });
