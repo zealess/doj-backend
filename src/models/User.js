@@ -35,7 +35,7 @@ const userSchema = new mongoose.Schema(
     discordAvatar: { type: String },
     discordLinkedAt: { type: Date },
 
-    // Grade le plus haut remonté par le bot / ton backend
+    // Grade le plus haut remonté par le bot / backend
     judgeGrade: { type: String },
 
     // --- STRUCTURE DOJ ---
@@ -57,21 +57,16 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Hook de hash du mot de passe
-// ⚠️ Avec une fonction async, on NE met PAS "next" en paramètre
-userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
+// ✅ Version compatible Mongoose 8 (PAS de `next`)
+userSchema.pre("save", async function () {
+  // Si le mot de passe n'a pas changé, on ne le re-hash pas
+  if (!this.isModified("password")) return;
 
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (err) {
-    next(err);
-  }
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Méthode de comparaison de mot de passe
+// Méthode de comparaison du mot de passe
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
