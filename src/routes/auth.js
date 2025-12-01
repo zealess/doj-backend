@@ -6,7 +6,7 @@ const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Petite fonction utilitaire pour renvoyer un user "safe" au front
+// Fonction utilitaire : user "safe" pour le front
 function buildSafeUser(user) {
   return {
     id: user._id,
@@ -33,7 +33,9 @@ function buildSafeUser(user) {
   };
 }
 
+// ──────────────────────────────────────────
 // POST /api/auth/register
+// ──────────────────────────────────────────
 router.post("/register", async (req, res) => {
   try {
     const { username, email, password, confirmPassword } = req.body;
@@ -71,7 +73,9 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────
 // POST /api/auth/login
+// ──────────────────────────────────────────
 router.post("/login", async (req, res) => {
   try {
     const { identifier, password } = req.body;
@@ -110,7 +114,9 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// GET /api/auth/me
+// ──────────────────────────────────────────
+// GET /api/auth/me  (PROFIL COURANT)
+// ──────────────────────────────────────────
 router.get("/me", authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -119,55 +125,19 @@ router.get("/me", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Utilisateur introuvable." });
     }
 
-    const safeUser = {
-      id: user._id,
-      username: user.username,
-      email: user.email,
-      role: user.role,
-      // Discord
-      discordLinked: !!user.discordId,
-      discordId: user.discordId || null,
-      discordUsername: user.discordUsername || null,
-      discordNickname: user.discordNickname || null,
-      discordAvatar: user.discordAvatar || null,
-      judgeGrade: user.judgeGrade || null,
-      // Structure
-      poles: user.poles || [],
-      habilitations: user.habilitations || [],
-      fjf: !!user.fjf,
-      sector: user.sector || null,
-      service: user.service || null,
-    };
-
-    return res.json({ user: safeUser });
+    return res.json({ user: buildSafeUser(user) });
   } catch (error) {
     console.error("Erreur /me:", error);
     return res.status(500).json({ message: "Erreur serveur." });
   }
 });
 
-// PUT /api/auth/profile
-// Mise à jour de la structure (secteur, service, pôles, habilitations, fjf)
-// ⚠ côté front tu vérifies déjà que seuls certains grades peuvent modifier
-router.put("/profile", async (req, res) => {
+// ──────────────────────────────────────────
+// PUT /api/auth/profile (mise à jour structure)
+// ──────────────────────────────────────────
+router.put("/profile", authMiddleware, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7)
-      : null;
-
-    if (!token) {
-      return res.status(401).json({ message: "Token manquant." });
-    }
-
-    let payload;
-    try {
-      payload = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (e) {
-      return res.status(401).json({ message: "Token invalide." });
-    }
-
-    const user = await User.findById(payload.id);
+    const user = await User.findById(req.userId);
     if (!user) {
       return res.status(404).json({ message: "Utilisateur introuvable." });
     }
