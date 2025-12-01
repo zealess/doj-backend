@@ -174,16 +174,18 @@ router.get("/callback", async (req, res) => {
     }
 
     // 4) Sauvegarder sur l'utilisateur
-    user.discordId = discordUserId;
-    user.discordUsername = discordUsername;
-    user.discordNickname = nickname || discordUsername;
-    user.discordAvatar = discordUser.avatar
-      ? `https://cdn.discordapp.com/avatars/${discordUserId}/${discordUser.avatar}.png?size=256`
-      : null;
-    user.discordHighestRole = highestRole; // ⬅️ CHAMP ALIGNÉ AVEC LE FRONT
-    user.discordLinkedAt = new Date();
+    // ...
+user.discordId = discordUser.id;
+user.discordUsername = discordUser.global_name || discordUser.username;
+user.discordNickname =
+  member.nick || discordUser.global_name || discordUser.username;
+user.discordAvatar = avatarUrl;
+user.discordLinkedAt = new Date();
 
-    await user.save();
+// 🔥 Ici : on enregistre le grade le plus haut
+user.judgeGrade = highestRoleName || null;
+
+await user.save();
 
     // 5) Redirection vers le dashboard avec un flag pour refresh
     const redirectUrl = `https://doj-frontend-rho.vercel.app/dashboard?discord=linked`;
